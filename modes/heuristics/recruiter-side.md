@@ -51,6 +51,9 @@ Good patterns:
 Avoid weak starts when stronger ownership is true: "helped", "assisted",
 "responsible for", "worked on", "participated in".
 
+
+### Minimum Bullet Count Per Position
+Every role in Work Experience must carry at least 3-4 substantive bullet points. Never emit a past position with only 1 or 2 bullets—sparse entries look lazy and uncommitted to reviewers. Ensure past roles reflect full operational scope: systems used, methodologies applied, team collaboration, and measurable deliverables.
 ## ATS Reality Check
 
 Optimize for parseability and human review, not "ATS hacks":
