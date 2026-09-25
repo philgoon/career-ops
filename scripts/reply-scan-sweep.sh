@@ -10,6 +10,24 @@
 
 set -euo pipefail
 
+# launchd/cron spawn with a minimal PATH that typically omits Homebrew,
+# ~/.local/bin (where the `claude` launcher symlink lives), and an
+# fnm-managed `node` (only put on PATH by fnm's shell-init hook, which a
+# non-interactive `zsh -l` login shell does not source). Made explicit here
+# rather than assumed, per docs/AUTOMATION.md's own "use an absolute path to
+# node if in doubt" guidance for exactly this reason.
+export PATH="$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"
+NODE_BIN="$(command -v node || true)"
+if [ -z "$NODE_BIN" ]; then
+  # Fall back to the newest installed fnm node build if PATH still didn't
+  # resolve one (e.g. a version fnm's shims never got linked onto PATH for).
+  NODE_BIN="$(ls -t "$HOME"/.fnm/node-versions/*/installation/bin/node 2>/dev/null | head -1)"
+fi
+if [ -z "$NODE_BIN" ]; then
+  echo "Error: no node binary found on PATH or under ~/.fnm/node-versions" >&2
+  exit 1
+fi
+
 REPO="$(cd "$(dirname "${0}")/.." && pwd)"
 OUT_DIR="$REPO/output"
 DATE_STR="$(date +%Y-%m-%d)"
@@ -21,7 +39,7 @@ cd "$REPO"
 
 {
   echo "=== $(date '+%Y-%m-%d %H:%M:%S') reply scan starting ==="
-  node gmail-reply-scan.mjs
+  "$NODE_BIN" gmail-reply-scan.mjs
   echo "=== $(date '+%Y-%m-%d %H:%M:%S') gmail-reply-scan.mjs done ==="
 } >> "$LOG_FILE" 2>&1
 
