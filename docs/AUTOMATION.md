@@ -1,16 +1,19 @@
-# Automation: recurring scans, a zero-token triage, a follow-up sweep, and a reply-check sweep
+# Automation: recurring scans, a zero-token triage, a follow-up sweep, a reply-check sweep, and a scan-and-evaluate sweep
 
 `career-ops` offers to scan for you on a schedule ("just say *scan every 3 days*"),
 but the actual scheduling is left to your operating system. This page ships the
 recipes: how to run the scanner unattended, a cheap zero-token **triage** pass
 that turns a pile of freshly-scanned URLs into a short "worth a look" list —
 *before* you spend any tokens evaluating them — an unattended **follow-up
-sweep** that drafts (never sends) chase-up emails for aging applications, and
-an unattended **reply-check sweep** that searches Gmail for employer replies
+sweep** that drafts (never sends) chase-up emails for aging applications, an
+unattended **reply-check sweep** that searches Gmail for employer replies
 to applications already sitting in `data/applications.md` and drafts (never
-sends, never auto-updates the tracker) a response.
+sends, never auto-updates the tracker) a response, and an unattended
+**scan-and-evaluate sweep** that finds new postings and turns them into
+reviewable reports and tailored CVs — stopping before any application is
+ever filled out or submitted.
 
-Four independent pieces, smallest first. You can use any of them on their own.
+Five independent pieces, smallest first. You can use any of them on their own.
 
 - **[1. Schedule the scan](#1-schedule-the-scan)** — run `node scan.mjs` on cron /
   launchd / Windows Task Scheduler. Zero tokens: the scanner only reads public
@@ -31,6 +34,14 @@ Four independent pieces, smallest first. You can use any of them on their own.
   headless `claude -p` call drafts a reply per classified candidate to a file.
   Personal/`gws`-CLI path, not career-ops's OAuth-env plugin architecture —
   see the section for the distinction and issue #1583.
+- **[5. Automate the scan-and-evaluate sweep](#5-automate-the-scan-and-evaluate-sweep)**
+  — `scripts/pipeline-sweep.sh` runs `node scan.mjs` (zero-token) then, only if
+  new postings landed, a headless `claude -p` call that runs the full
+  `/career-ops pipeline` evaluation (report + tailored CV per the existing
+  `auto_pdf_score_threshold` gate) on every one of them. **It never fills out
+  or submits a real application** — that's this project's absolute,
+  non-negotiable Human-in-the-Loop guarantee (see `AGENTS.md`), not a
+  configurable option. You still decide, per posting, whether to apply.
 
 > Everything here is **local-first**: your CV, profile, and pipeline stay on your
 > machine — none of your data is uploaded. The scan does reach out to *public*
@@ -39,7 +50,9 @@ Four independent pieces, smallest first. You can use any of them on their own.
 > local files. Evaluating a shortlisted role later (`/career-ops pipeline`) is the
 > only step that spends tokens. The reply-check sweep is the one piece that reads
 > real mailbox content (via your own already-authenticated `gws` session) — see
-> §4 for exactly what it searches and what it never does.
+> §4 for exactly what it searches and what it never does. §5 is the one piece
+> that touches real employer job postings end to end, short of the submit click
+> itself, which stays yours.
 
 ---
 
@@ -386,15 +399,103 @@ twice-weekly follow-up sweep.
 
 ---
 
+## 5. Automate the scan-and-evaluate sweep
+
+This is §1 (scan) and the evaluation half of `/career-ops pipeline` chained
+into one unattended run, so new postings turn into a reviewable report and a
+tailored CV without you needing to be at the keyboard when they post — with
+one hard line neither this script nor any future version of it is allowed to
+cross.
+
+**It never fills out or submits a real application.** That is not a
+configuration knob. It is this project's founding guarantee (`AGENTS.md`'s
+Ethical Use section: *"NEVER submit an application without the user
+reviewing it first... always STOP before clicking Submit/Send/Apply"*; the
+README FAQ: *"career-ops is a filter, not a spray-and-pray auto-applier...
+it never submits, sends, or clicks anything"*). `scripts/pipeline-sweep.sh`'s
+own prompt repeats that instruction explicitly — the sweep produces the
+report and the PDF; you (or a live session) still decide, per posting,
+whether to actually apply, exactly like the Acceleration Partners
+application earlier in this history.
+
+**What it does**, in order:
+
+1. Runs `node scan.mjs --json` (zero-token, same as §1) to pull new postings
+   from every enabled company/job board into `data/pipeline.md`'s `## Pending`.
+2. Counts `## Pending` entries. Zero new postings → logs and exits without
+   spending a token on an empty evaluation.
+3. If new postings exist, a headless `claude -p` call runs the normal
+   `/career-ops pipeline` A-H evaluation against every pending entry: writes
+   a report to `reports/`, generates a tailored CV/PDF per the existing
+   `auto_pdf_score_threshold` gate (`config/profile.yml`), updates
+   `data/applications.md`, and moves each entry from Pending to Processed —
+   identical output to running `/career-ops pipeline` yourself, just
+   unattended.
+4. Writes a same-day digest (`output/pipeline-sweep-{date}.md`): every
+   evaluated posting, its score, report link, and PDF status, highest score
+   first.
+5. Logs start/end to `data/pipeline-sweep.log` (gitignored) and fires a
+   native notification (macOS `osascript`) when the digest is ready.
+
+**Cost.** Step 1 is free. Step 3 is genuine LLM work — one evaluation per
+new posting, same token cost as running `/career-ops pipeline` live — so a
+heavy scan day (dozens of new postings) can be a real Claude-session cost,
+and can hit the same weekly usage limit the reply-check sweep already ran
+into once. A failed/limited `claude -p` call here fails the same way: no
+digest, no notification, nothing partially written — `data/pipeline.md` and
+`data/applications.md` only change once a worker's evaluation actually
+completes.
+
+### macOS — launchd
+
+Save as `~/Library/LaunchAgents/io.career-ops.pipeline-sweep.plist`, then
+`launchctl load ~/Library/LaunchAgents/io.career-ops.pipeline-sweep.plist`:
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key> <string>io.career-ops.pipeline-sweep</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/zsh</string>
+    <string>-l</string>
+    <string>/path/to/career-ops/scripts/pipeline-sweep.sh</string>
+  </array>
+  <key>WorkingDirectory</key> <string>/path/to/career-ops</string>
+  <key>StartCalendarInterval</key>
+  <dict>
+    <key>Hour</key>    <integer>7</integer>
+    <key>Minute</key>  <integer>0</integer>
+  </dict>
+  <key>StandardOutPath</key>   <string>/path/to/career-ops/data/pipeline-sweep.launchd.log</string>
+  <key>StandardErrorPath</key> <string>/path/to/career-ops/data/pipeline-sweep.launchd.log</string>
+</dict>
+</plist>
+```
+
+Daily at 7am, ahead of the reply-check sweep (8:30am) and the follow-up
+sweep, so a fresh evaluation digest is waiting before either of the other
+two runs.
+
+### cron (same idea, simpler, no wake-catch-up)
+
+```cron
+0 7 * * * /path/to/career-ops/scripts/pipeline-sweep.sh
+```
+
+---
+
 ## How this fits the rest of career-ops
 
 - **Zero-token by default.** Scheduling and triage cost nothing; only the eval you
   choose to run spends tokens.
-- **Complements batch-eval savings.** This is the *scheduling + first-glance* layer
-  that comes *before* evaluation. Optimizations to the evaluation stage itself are
-  separate and stack on top.
+- **Complements batch-eval savings.** §1-2 are the *scheduling + first-glance*
+  layer that comes *before* evaluation; §5 chains straight into evaluation
+  itself. Optimizations to the evaluation stage itself stack on top of either.
 - **Nothing new to install.** `node scan.mjs` already ships; the triage is a prompt,
   not a dependency.
 - **One new dependency, scoped to one piece.** Only §4 needs the `gws` CLI
-  authenticated locally; the other three pieces need nothing beyond what
+  authenticated locally; the other four pieces need nothing beyond what
   career-ops already ships.
