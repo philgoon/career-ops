@@ -17,6 +17,7 @@ import readline from 'node:readline';
 import { fileURLToPath } from 'node:url';
 import { matchCandidates, classifyReply } from './reply-matcher.mjs';
 import { resolveColumns, parseTrackerRow } from './tracker-parse.mjs';
+import { loadTrackerApps, loadFollowups } from './lib/reply-tracker-io.mjs';
 import {
   openTrackerTransaction, rebuildRow, resolveTrackerPath,
 } from './tracker-utils.mjs';
@@ -93,53 +94,6 @@ function ensureCandidatesFile(filePath) {
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
   fs.writeFileSync(filePath, JSON.stringify(mockCandidates, null, 2), 'utf-8');
   console.log(`Created default mock candidates file at ${filePath}`);
-}
-
-// Load applications tracker rows
-function loadTrackerApps() {
-  if (!fs.existsSync(APPS_FILE)) {
-    return [];
-  }
-  const content = fs.readFileSync(APPS_FILE, 'utf-8');
-  const lines = content.split('\n');
-  const colmap = resolveColumns(lines);
-  const apps = [];
-  for (const line of lines) {
-    const row = parseTrackerRow(line, colmap);
-    if (row) {
-      apps.push(row);
-    }
-  }
-  return apps;
-}
-
-// Load followups history
-function loadFollowups() {
-  if (!fs.existsSync(FOLLOWUPS_FILE)) {
-    return [];
-  }
-  const content = fs.readFileSync(FOLLOWUPS_FILE, 'utf-8');
-  const lines = content.split('\n');
-  const followups = [];
-  for (const line of lines) {
-    if (!line.startsWith('|')) continue;
-    const parts = line.split('|').map(s => s.trim());
-    if (parts.length < 8) continue;
-    const num = parseInt(parts[1], 10);
-    const appNum = parseInt(parts[2], 10);
-    if (isNaN(num) || isNaN(appNum)) continue;
-    followups.push({
-      num,
-      appNum,
-      date: parts[3],
-      company: parts[4],
-      role: parts[5],
-      channel: parts[6],
-      contact: parts[7],
-      notes: parts[8] || ''
-    });
-  }
-  return followups;
 }
 
 // Apply an approved batch in one locked read/modify/write transaction. Reading
@@ -238,8 +192,8 @@ async function main() {
     process.exit(1);
   }
 
-  const apps = loadTrackerApps();
-  const followups = loadFollowups();
+  const apps = loadTrackerApps(APPS_FILE);
+  const followups = loadFollowups(FOLLOWUPS_FILE);
 
   const matched = matchCandidates(candidates, apps, followups);
 

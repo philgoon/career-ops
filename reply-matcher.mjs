@@ -508,6 +508,56 @@ export function matchCandidates(candidates, apps, followups = []) {
   return results;
 }
 
+// Keyword categories shared with gmail-reply-scan.mjs, which builds its Gmail
+// search query from these same lists (excluding noiseKeywords) so the scanner
+// never fetches a message classifyReply() couldn't itself have justified
+// fetching, and the two never drift apart into two competing keyword lists.
+
+// 1. Noise keywords (checked first to separate alerts/leads from actual interviews)
+export const noiseKeywords = [
+  '邀请投递', '抢面试先机', '近期热招', '立即投递', '热招职位', '订阅职位', '职位推荐', '推荐职位',
+  'job alert', 'invitation to apply', 'recommended jobs', 'newsletter', 'marketing digest', 'job recommendation', 'suggested jobs'
+];
+
+// 2. Offer keywords — specific phrases only. A bare 'offer' substring is deliberately
+//    excluded: it collides with rejection wording such as 'unable to offer' (see
+//    rejectionKeywords) and would mis-type rejections as offers.
+export const offerKeywords = [
+  '录取通知书', '录用信', '录用通知', '录用', '薪资确认', '入职协议', '意向书',
+  'offer letter', 'employment agreement', 'job offer', 'congratulations on the offer', 'compensation details', 'pleased to offer'
+];
+
+// 3. Rejected keywords
+export const rejectionKeywords = [
+  '很遗憾', '暂不匹配', '不合适', '未能进入下一轮', '感谢您的时间', '未通过', '不再考虑', '决定不推进',
+  'unfortunately', 'not a match', 'not matching', 'decided not to proceed', 'will not be moving forward', 'position has been filled', 'role has been closed', 'unable to offer'
+];
+
+// 4. Auto-confirmation keywords
+export const autoKeywords = [
+  '自动回复', '收到您的申请', '申请已收到', '投递成功', '确认收到',
+  'thank you for applying', 'application received', 'received your application', 'auto-confirmation', 'confirmation of application', 'automatic reply'
+];
+
+// 5. Need Action keywords
+export const actionKeywords = [
+  '补充信息', '提供信息', '完成测评', '在线测评', '笔试题', '做个测试', '截止日期前', '截止时间',
+  'complete a form', 'provide information', 'finish an assessment', 'coding challenge', 'online test', 'respond by a deadline', 'pick a time', 'schedule a time', 'book a time',
+  'complete assessment', 'take a test', 'assessment', 'coding test', 'deadline', 'fill out', 'complete the form', 'provide details', 'submit info'
+];
+
+// 6. Interview keywords
+export const interviewKeywords = [
+  '邀您面试', '邀约面试', '微信小程序面试', 'AI微信小程序', '面试形式', '面试时间', '面试时长', '安排面试', '预约面试', '首轮面试', '视频面试', '电话面试', '现场面试', '面试邀请', '面试流程', '简历通过',
+  'interview invitation', 'schedule an interview', 'scheduling link', 'ai interview', 'video interview', 'phone screen', 'onsite interview', 'final round', 'invite you to interview', 'interview request', 'interview schedule'
+];
+
+// 7. Responded keywords
+export const respondedKeywords = [
+  '联系您', '回复您', '想沟通', '想聊聊', '进一步沟通',
+  'would like to chat', 'reach out', 'connect with you', 'hiring manager responded'
+];
+
 export function classifyReply(cand) {
   const subject = cand.subject || '';
   const body = cand.body_snippet || '';
@@ -528,51 +578,6 @@ export function classifyReply(cand) {
     }
     return found;
   };
-
-  // 1. Noise keywords (checked first to separate alerts/leads from actual interviews)
-  const noiseKeywords = [
-    '邀请投递', '抢面试先机', '近期热招', '立即投递', '热招职位', '订阅职位', '职位推荐', '推荐职位',
-    'job alert', 'invitation to apply', 'recommended jobs', 'newsletter', 'marketing digest', 'job recommendation', 'suggested jobs'
-  ];
-
-  // 2. Offer keywords — specific phrases only. A bare 'offer' substring is deliberately
-  //    excluded: it collides with rejection wording such as 'unable to offer' (see
-  //    rejectionKeywords) and would mis-type rejections as offers.
-  const offerKeywords = [
-    '录取通知书', '录用信', '录用通知', '录用', '薪资确认', '入职协议', '意向书',
-    'offer letter', 'employment agreement', 'job offer', 'congratulations on the offer', 'compensation details', 'pleased to offer'
-  ];
-
-  // 3. Rejected keywords
-  const rejectionKeywords = [
-    '很遗憾', '暂不匹配', '不合适', '未能进入下一轮', '感谢您的时间', '未通过', '不再考虑', '决定不推进',
-    'unfortunately', 'not a match', 'not matching', 'decided not to proceed', 'will not be moving forward', 'position has been filled', 'role has been closed', 'unable to offer'
-  ];
-
-  // 4. Auto-confirmation keywords
-  const autoKeywords = [
-    '自动回复', '收到您的申请', '申请已收到', '投递成功', '确认收到',
-    'thank you for applying', 'application received', 'received your application', 'auto-confirmation', 'confirmation of application', 'automatic reply'
-  ];
-
-  // 5. Need Action keywords
-  const actionKeywords = [
-    '补充信息', '提供信息', '完成测评', '在线测评', '笔试题', '做个测试', '截止日期前', '截止时间',
-    'complete a form', 'provide information', 'finish an assessment', 'coding challenge', 'online test', 'respond by a deadline', 'pick a time', 'schedule a time', 'book a time',
-    'complete assessment', 'take a test', 'assessment', 'coding test', 'deadline', 'fill out', 'complete the form', 'provide details', 'submit info'
-  ];
-
-  // 6. Interview keywords
-  const interviewKeywords = [
-    '邀您面试', '邀约面试', '微信小程序面试', 'AI微信小程序', '面试形式', '面试时间', '面试时长', '安排面试', '预约面试', '首轮面试', '视频面试', '电话面试', '现场面试', '面试邀请', '面试流程', '简历通过',
-    'interview invitation', 'schedule an interview', 'scheduling link', 'ai interview', 'video interview', 'phone screen', 'onsite interview', 'final round', 'invite you to interview', 'interview request', 'interview schedule'
-  ];
-
-  // 7. Responded keywords
-  const respondedKeywords = [
-    '联系您', '回复您', '想沟通', '想聊聊', '进一步沟通',
-    'would like to chat', 'reach out', 'connect with you', 'hiring manager responded'
-  ];
 
   const isNoise = check(noiseKeywords);
   if (isNoise) {

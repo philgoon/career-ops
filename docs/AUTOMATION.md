@@ -1,13 +1,16 @@
-# Automation: recurring scans, a zero-token triage, and a follow-up sweep
+# Automation: recurring scans, a zero-token triage, a follow-up sweep, and a reply-check sweep
 
 `career-ops` offers to scan for you on a schedule ("just say *scan every 3 days*"),
 but the actual scheduling is left to your operating system. This page ships the
 recipes: how to run the scanner unattended, a cheap zero-token **triage** pass
 that turns a pile of freshly-scanned URLs into a short "worth a look" list —
-*before* you spend any tokens evaluating them — and an unattended **follow-up
-sweep** that drafts (never sends) chase-up emails for aging applications.
+*before* you spend any tokens evaluating them — an unattended **follow-up
+sweep** that drafts (never sends) chase-up emails for aging applications, and
+an unattended **reply-check sweep** that searches Gmail for employer replies
+to applications already sitting in `data/applications.md` and drafts (never
+sends, never auto-updates the tracker) a response.
 
-Three independent pieces, smallest first. You can use any of them on their own.
+Four independent pieces, smallest first. You can use any of them on their own.
 
 - **[1. Schedule the scan](#1-schedule-the-scan)** — run `node scan.mjs` on cron /
   launchd / Windows Task Scheduler. Zero tokens: the scanner only reads public
@@ -21,13 +24,22 @@ Three independent pieces, smallest first. You can use any of them on their own.
   `scripts/followup-sweep.sh`, that drafts follow-ups for overdue applications
   to a file for you to review. Costs tokens (it's LLM-driven, not a script),
   but never sends anything on its own.
+- **[4. Automate the reply-check sweep](#4-automate-the-reply-check-sweep)** —
+  `scripts/reply-scan-sweep.sh` runs `node gmail-reply-scan.mjs` (zero-token,
+  read-only Gmail search via the `gws` CLI, scoped to your tracker's
+  in-flight companies) to populate `data/reply-candidates.json`, then a
+  headless `claude -p` call drafts a reply per classified candidate to a file.
+  Personal/`gws`-CLI path, not career-ops's OAuth-env plugin architecture —
+  see the section for the distinction and issue #1583.
 
 > Everything here is **local-first**: your CV, profile, and pipeline stay on your
 > machine — none of your data is uploaded. The scan does reach out to *public*
 > job-board APIs to read listings (the same zero-key reads the manual scan makes),
 > but it sends none of your personal data with them, and the triage only reads your
 > local files. Evaluating a shortlisted role later (`/career-ops pipeline`) is the
-> only step that spends tokens.
+> only step that spends tokens. The reply-check sweep is the one piece that reads
+> real mailbox content (via your own already-authenticated `gws` session) — see
+> §4 for exactly what it searches and what it never does.
 
 ---
 
@@ -264,6 +276,116 @@ silently discarding the evaluation itself.
 
 ---
 
+## 4. Automate the reply-check sweep
+
+Unlike the follow-up sweep (which only ever reads your own tracker), a
+reply-check sweep has to read real mailbox content, so it needs a Gmail
+credential. career-ops ships a documented, unbuilt OAuth-env plugin design for
+this (issue [#1583](https://github.com/career-ops-hq/career-ops/issues/1583) —
+extends `plugins/gmail` with `GMAIL_CLIENT_ID`/`GMAIL_CLIENT_SECRET`/
+`GMAIL_REFRESH_TOKEN`, a new engine hook, cursor-based dedup). Nobody has
+shipped that yet.
+
+`gmail-reply-scan.mjs` is a narrower alternative for a machine that already has
+the `gws` (Google Workspace CLI) binary authenticated
+locally: it does the same one job paste-reply.mjs does for a manually pasted
+email — normalize a real Gmail hit into the exact candidate shape
+`reply-watch.mjs` expects and append it to `data/reply-candidates.json` — but
+sources those candidates from a live, scoped Gmail search instead of a paste.
+It is a **personal convenience path, not career-ops's plugin architecture**:
+it shells out to the `gws` CLI rather than using OAuth-env credentials, so
+it isn't something to upstream as-is.
+
+It never classifies a reply, never runs `reply-watch.mjs`, and never touches
+`data/applications.md` — identical boundary to `paste-reply.mjs`.
+
+**What it searches.** Two bounded Gmail queries, both scoped to
+`newer_than:{days}d` (`--days`, default 21):
+
+1. A sender-domain query — company domains known from `data/follow-ups.md`
+   contacts/notes or guessed (`{company}.com/.co/.io`) via
+   `reply-matcher.mjs`'s own `getAppDomains()`, for every tracker row
+   currently `Applied`, `Responded`, or `Interview`.
+2. One keyword query **per** watched company — the company's own name,
+   required alongside one of `classifyReply()`'s own non-noise signal
+   phrases (interview/offer/rejection/auto-confirmation/need-action/
+   responded). Sharing that keyword list with `classifyReply()` means the
+   scanner can never fetch a message classification wouldn't itself have
+   recognized as a signal.
+
+A blind, company-unscoped keyword search was tried first and pulled in
+soccer-league admin mail, hosting-provider notifications, and travel
+newsletters on bare words like "deadline"/"assessment"/"reach out" — those
+phrases only carry signal alongside a corroborating company match, and a
+pre-classification fetch filter needs that same corroboration up front.
+
+**Safety.** Both Gmail calls are read-only (`messages.list`, `messages.get`
+with `format: metadata` — the lightest fetch that still returns Gmail's own
+snippet). No send/reply/delete/archive/label call is ever made. A processed-
+message cursor (`data/reply-scan-state.json`) means re-running the scan never
+appends the same message twice. Any `gws` failure (auth, network, malformed
+output) aborts before writing anything — never a partial candidates file or a
+corrupted cursor.
+
+`scripts/reply-scan-sweep.sh` wraps it the same way
+`scripts/followup-sweep.sh` wraps the follow-up sweep:
+
+1. Runs `node gmail-reply-scan.mjs` (zero-token) to populate
+   `data/reply-candidates.json`.
+2. Runs `claude -p` with a prompt that reproduces `reply-watch.mjs`'s own
+   matching/classification in **report-only** mode and drafts a response per
+   classified candidate (Interview/Offer/Rejected/Need Action/Responded) to
+   `output/reply-review-{date}.md`.
+3. Logs start/end to `data/reply-scan-sweep.log` (gitignored).
+4. Fires a native notification (macOS `osascript`) when a fresh review file is
+   ready.
+
+**It never sends, submits, or updates the tracker on its own.** You read the
+draft file, decide what's real, and run `node reply-watch.mjs` yourself to
+apply any tracker status change — same human-in-the-loop boundary as every
+other sweep on this page.
+
+### macOS — launchd
+
+Save as `~/Library/LaunchAgents/io.career-ops.reply-scan.plist`, then
+`launchctl load ~/Library/LaunchAgents/io.career-ops.reply-scan.plist`:
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key> <string>io.career-ops.reply-scan</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/zsh</string>
+    <string>-l</string>
+    <string>/path/to/career-ops/scripts/reply-scan-sweep.sh</string>
+  </array>
+  <key>WorkingDirectory</key> <string>/path/to/career-ops</string>
+  <key>StartCalendarInterval</key>
+  <dict>
+    <key>Hour</key>    <integer>8</integer>
+    <key>Minute</key>  <integer>30</integer>
+  </dict>
+  <key>StandardOutPath</key>   <string>/path/to/career-ops/data/reply-scan-sweep.launchd.log</string>
+  <key>StandardErrorPath</key> <string>/path/to/career-ops/data/reply-scan-sweep.launchd.log</string>
+</dict>
+</plist>
+```
+
+Daily at 8:30am — application replies are time-sensitive (an interview
+scheduling link can have a short window), so this runs more often than the
+twice-weekly follow-up sweep.
+
+### cron (same idea, simpler, no wake-catch-up)
+
+```cron
+30 8 * * * /path/to/career-ops/scripts/reply-scan-sweep.sh
+```
+
+---
+
 ## How this fits the rest of career-ops
 
 - **Zero-token by default.** Scheduling and triage cost nothing; only the eval you
@@ -273,3 +395,6 @@ silently discarding the evaluation itself.
   separate and stack on top.
 - **Nothing new to install.** `node scan.mjs` already ships; the triage is a prompt,
   not a dependency.
+- **One new dependency, scoped to one piece.** Only §4 needs the `gws` CLI
+  authenticated locally; the other three pieces need nothing beyond what
+  career-ops already ships.

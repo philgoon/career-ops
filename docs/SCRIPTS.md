@@ -822,7 +822,7 @@ Multiple matches print as a table; zero matches print a clean message.
 
 ## paste-reply
 
-Manual, no-Gmail input path into `reply-watch.mjs`'s classification pipeline (#1802). `reply-watch.mjs` already classifies employer replies and matches them to tracker rows, but its only input is `data/reply-candidates.json`, and the only planned way to populate that file is a Gmail scanner (#1583, unbuilt, requires OAuth inbox-read access). `paste-reply.mjs` normalizes a pasted (or file-provided) email's subject/from/body into the exact candidate shape `reply-watch.mjs` expects and appends it — existing candidates are never overwritten. It does not classify the reply itself (that stays `reply-watch.mjs`'s job) and never runs `reply-watch.mjs` or touches `data/applications.md`.
+Manual, no-Gmail input path into `reply-watch.mjs`'s classification pipeline (#1802). `reply-watch.mjs` already classifies employer replies and matches them to tracker rows, but its only input is `data/reply-candidates.json`, and the only *planned, plugin-architecture* way to populate that file is a Gmail scanner (#1583, unbuilt, requires OAuth inbox-read access) — see [`gmail-reply-scan`](#gmail-reply-scan) below for a personal `gws`-CLI alternative that ships today instead. `paste-reply.mjs` normalizes a pasted (or file-provided) email's subject/from/body into the exact candidate shape `reply-watch.mjs` expects and appends it — existing candidates are never overwritten. It does not classify the reply itself (that stays `reply-watch.mjs`'s job) and never runs `reply-watch.mjs` or touches `data/applications.md`.
 
 ```bash
 npm run paste-reply                    # interactive: prompts for subject, from, body
@@ -841,6 +841,23 @@ From: <sender>
 If no `Subject:`/`From:` header lines are found, the whole file is treated as the body. After appending, run `node reply-watch.mjs` to classify the new candidate and review suggested tracker updates.
 
 **Exit codes:** `0` candidate appended, `1` missing `--file` argument, input file not found, or no subject/body text found.
+
+---
+
+## gmail-reply-scan
+
+Personal, `gws`-CLI-based input path into `reply-watch.mjs`'s classification pipeline — an alternative to both `paste-reply.mjs` (manual) and issue #1583 (career-ops's own unbuilt OAuth-env plugin design). If the `gws` (Google Workspace CLI) binary is already authenticated on this machine, `gmail-reply-scan.mjs` runs two bounded, read-only Gmail searches — a sender-domain net and a per-company keyword net sharing `reply-matcher.mjs`'s own non-noise keyword categories — scoped to tracker rows currently `Applied`/`Responded`/`Interview`, and appends any new hits to `data/reply-candidates.json` in the exact shape `reply-watch.mjs` expects. Same boundary as `paste-reply.mjs`: it never sets `signal`, never classifies, never runs `reply-watch.mjs`, never touches `data/applications.md`. A processed-message cursor (`data/reply-scan-state.json`) means re-running it never appends the same message twice. See [AUTOMATION.md](AUTOMATION.md) §4 for the unattended cron/launchd wrapper (`scripts/reply-scan-sweep.sh`).
+
+```bash
+node gmail-reply-scan.mjs                        # scan the last 21 days (default)
+node gmail-reply-scan.mjs --days 45               # widen the lookback window
+node gmail-reply-scan.mjs --dry-run               # print what would be appended, write nothing
+node gmail-reply-scan.mjs --max-results 200       # raise the per-query result cap (default 100)
+```
+
+After it reports new candidates, run `node reply-watch.mjs` to classify them and review suggested tracker updates.
+
+**Exit codes:** `0` scan completed (including "nothing to scan" / "no new messages"), `1` a `gws` call failed (auth, network, malformed output) — nothing is written to `data/reply-candidates.json` or `data/reply-scan-state.json` on that path.
 
 ---
 
@@ -1040,6 +1057,7 @@ These have no `npm run` binding — modes and agents call them with
 | `node followup-cadence.mjs [--summary]` | Follow-up cadence per active application; flags overdue entries |
 | `node followup-seed.mjs [--backfill]` | Seed `data/follow-ups.md` with a pinned first follow-up date when a row turns Applied |
 | `node reply-watch.mjs` | Classify employer replies from `data/reply-candidates.json`, match to tracker rows, print a review digest |
+| `node gmail-reply-scan.mjs [--days N] [--dry-run]` | Personal `gws`-CLI Gmail search (sender-domain + per-company keyword net) into `data/reply-candidates.json`, deduped via `data/reply-scan-state.json`; never classifies, never touches the tracker — see [AUTOMATION.md](AUTOMATION.md) §4 |
 | `node process-quality.mjs [--summary]` | Aggregate `[process-friction]` tags from `data/active-interviews.md` per company |
 | `node reserve-report-num.mjs [--count N]` | Atomically reserve report numbers for parallel workers (fixes the #749 race) |
 | `node agent-inbox.mjs add "..."` | Append a request to the queue the agent drains at the next session start |
